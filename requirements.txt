@@ -1,6 +1,10 @@
 # Postgres (Supabase) — required when DATABASE_URL is set for jobs/run_inference.py
 psycopg[binary]>=3.1.0
 
-# Optional: only needed after Part 2 saves artifacts/fraud_model.joblib
+# ML training pipeline (pipeline_sklearn.py)
+pandas>=2.0
+numpy>=1.24
+scipy>=1.10
+scikit-learn>=1.3
+xgboost>=2.0
 joblib>=1.4.0
-scikit-learn>=1.3.0
