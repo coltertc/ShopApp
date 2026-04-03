@@ -83,8 +83,8 @@ export function RunScoringClient() {
         </div>
       ) : null}
       <p className="text-xs text-zinc-500">
-        After a successful run, open <strong>Priority Queue</strong> to see unshipped orders ranked by fraud
-        probability.
+        Response <code className="rounded bg-zinc-100 px-1 dark:bg-zinc-800">mode</code> is usually{" "}
+        <strong>typescript</strong> on Vercel. After a successful run, open <strong>Priority Queue</strong>.
       </p>
     </div>
   );

@@ -4,8 +4,10 @@
  *   - model.joblib (latest)
  *   - joblib/model_<YYYYMMDD_HHMMSS>.joblib (archive per run)
  *
- * Requires Python 3 with packages in requirements.txt and shop.db in this folder
- * (or SHOP_DB_PATH in the environment).
+ * Requires Python 3 and requirements.txt. Set DATABASE_URL to your Supabase Postgres
+ * URI (same as the web app). If DATABASE_URL is unset, uses SQLite shop.db or SHOP_DB_PATH.
+ * Deployed scoring uses TypeScript (see src/lib/inference.ts); this trains sklearn for the
+ * notebook and optional nightly GitHub Actions — not for Vercel request handling by default.
  *
  * Usage: node pipeline.js
  */

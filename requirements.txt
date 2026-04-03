@@ -1,4 +1,4 @@
-# Postgres (Supabase) — required when DATABASE_URL is set for jobs/run_inference.py
+# Postgres (Supabase) — DATABASE_URL for jobs/run_inference.py and pipeline_sklearn.py
 psycopg[binary]>=3.1.0
 
 # ML training pipeline (pipeline_sklearn.py)

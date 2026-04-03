@@ -1,13 +1,18 @@
 """
 Batch scoring for unshipped orders → order_predictions.
 
-- If DATABASE_URL is set (Supabase): uses psycopg.
+- If DATABASE_URL is set (Supabase): uses psycopg + pandas.
 - Else: uses SQLite at ../shop.db (local-only legacy).
 
-Without artifacts/fraud_model.joblib: heuristic matches src/lib/inference.ts.
+Loads the Part 2 sklearn pipeline from (first match):
+  FRAUD_MODEL_PATH, ../model.joblib, ../artifacts/fraud_model.joblib
+
+Expects ../artifacts/feature_names.json (written when you run pipeline_sklearn.py).
+If the model or feature list is missing, falls back to the same heuristic as src/lib/inference.ts.
 """
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import sys
@@ -15,7 +20,12 @@ from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARTIFACT_DIR = os.path.join(ROOT, "artifacts")
-MODEL_PATH = os.path.join(ARTIFACT_DIR, "fraud_model.joblib")
+MODEL_PATH_LEGACY = os.path.join(ARTIFACT_DIR, "fraud_model.joblib")
+MODEL_PATH_ROOT = os.path.join(ROOT, "model.joblib")
+FEATURE_NAMES_PATH = os.path.join(ARTIFACT_DIR, "feature_names.json")
+
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
 CREATE_SQL_PG = """
 CREATE TABLE IF NOT EXISTS order_predictions (
@@ -36,9 +46,35 @@ CREATE TABLE IF NOT EXISTS order_predictions (
 );
 """
 
-UNSHIPPED_SQL = """
-SELECT o.order_id, o.risk_score, o.order_total, o.payment_method, o.promo_used, o.ip_country
+# Same features as pipeline_sklearn training query, plus unshipped filter.
+UNSHIPPED_FEATURES_SQL = """
+SELECT
+  o.order_id,
+  o.customer_id,
+  o.order_datetime,
+  o.billing_zip,
+  o.shipping_zip,
+  o.shipping_state,
+  o.payment_method,
+  o.device_type,
+  o.ip_country,
+  o.promo_used,
+  o.promo_code,
+  o.order_subtotal,
+  o.shipping_fee,
+  o.tax_amount,
+  o.order_total,
+  o.risk_score,
+  o.is_fraud,
+  c.gender,
+  c.city,
+  c.state,
+  c.customer_segment,
+  c.loyalty_tier,
+  c.birthdate,
+  c.created_at AS customer_created_at
 FROM orders o
+JOIN customers c ON c.customer_id = o.customer_id
 LEFT JOIN shipments s ON s.order_id = o.order_id
 WHERE s.shipment_id IS NULL
 """
@@ -63,7 +99,30 @@ ON CONFLICT(order_id) DO UPDATE SET
 
 
 def db_path_sqlite() -> str:
-    return os.environ.get("SHOP_DB_PATH", os.path.join(ROOT, "..", "shop.db"))
+    return os.environ.get("SHOP_DB_PATH", os.path.join(ROOT, "shop.db"))
+
+
+def resolve_model_path() -> str | None:
+    envp = os.environ.get("FRAUD_MODEL_PATH")
+    if envp and os.path.isfile(envp):
+        return envp
+    for p in (MODEL_PATH_ROOT, MODEL_PATH_LEGACY):
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def load_feature_names() -> list[str] | None:
+    if not os.path.isfile(FEATURE_NAMES_PATH):
+        return None
+    try:
+        with open(FEATURE_NAMES_PATH, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list) and data:
+            return data
+    except (OSError, json.JSONDecodeError):
+        pass
+    return None
 
 
 def fraud_probability_heuristic(
@@ -87,8 +146,59 @@ def fraud_probability_heuristic(
     return round(p, 3)
 
 
-def score_with_model(model, row: tuple) -> tuple[float, int] | None:
-    return None
+def try_sklearn_batch(
+    model,
+    feature_names: list[str],
+    rows: list[tuple],
+    col_names: list[str],
+) -> dict[int, tuple[float, int]] | None:
+    """Returns order_id → (prob, pred) for rows the preprocessor kept; None to use heuristics."""
+    try:
+        import numpy as np
+        import pandas as pd
+    except ImportError:
+        print("WARN: pandas/numpy not available for sklearn batch", file=sys.stderr)
+        return None
+
+    try:
+        from pipeline_sklearn import preprocess_orders_features
+    except Exception as e:
+        print(f"WARN: could not import preprocess_orders_features: {e}", file=sys.stderr)
+        return None
+
+    if not rows:
+        return {}
+
+    df = pd.DataFrame.from_records(rows, columns=col_names)
+    if "order_id" not in df.columns:
+        return None
+
+    oid_series = df.pop("order_id")
+    df.index = oid_series
+
+    try:
+        X = preprocess_orders_features(df, for_inference=True, messages=False)
+    except Exception as e:
+        print(f"WARN: preprocess failed: {e}", file=sys.stderr)
+        return None
+
+    if X.shape[0] == 0:
+        return {}
+
+    X = X.reindex(columns=feature_names)
+
+    try:
+        probs = model.predict_proba(X)[:, 1]
+        preds = model.predict(X)
+    except Exception as e:
+        print(f"WARN: model predict failed: {e}", file=sys.stderr)
+        return None
+
+    out: dict[int, tuple[float, int]] = {}
+    for oid, prob, pred in zip(X.index, probs, preds):
+        p = float(np.clip(prob, 0.0, 1.0))
+        out[int(oid)] = (round(p, 4), int(pred))
+    return out
 
 
 def run_pg() -> int:
@@ -96,35 +206,48 @@ def run_pg() -> int:
 
     url = os.environ["DATABASE_URL"]
     ts = datetime.now(timezone.utc).isoformat()
+
     model = None
-    if os.path.isfile(MODEL_PATH):
+    feature_names = load_feature_names()
+    mpath = resolve_model_path()
+    if mpath:
         try:
             import joblib  # type: ignore
 
-            model = joblib.load(MODEL_PATH)
+            model = joblib.load(mpath)
         except Exception as e:
-            print(f"WARN: could not load model: {e}", file=sys.stderr)
+            print(f"WARN: could not load model from {mpath}: {e}", file=sys.stderr)
 
     with psycopg.connect(url) as conn:
         conn.execute(CREATE_SQL_PG)
-        rows = conn.execute(UNSHIPPED_SQL).fetchall()
+        cur = conn.execute(UNSHIPPED_FEATURES_SQL)
+        col_names = [d.name for d in cur.description] if cur.description else []
+        rows = cur.fetchall()
+
+        sklearn_scores: dict[int, tuple[float, int]] | None = None
+        if model is not None and feature_names:
+            sklearn_scores = try_sklearn_batch(model, feature_names, list(rows), col_names)
+
         n = 0
+        colmap = {name: i for i, name in enumerate(col_names)}
         for row in rows:
-            oid = row[0]
+            oid = int(row[colmap["order_id"]])
             prob = None
             pred = None
-            if model is not None:
-                try:
-                    out = score_with_model(model, row)
-                    if out is not None:
-                        prob, pred = out
-                except Exception as e:
-                    print(f"WARN: model score failed for order {oid}: {e}", file=sys.stderr)
+            if sklearn_scores and oid in sklearn_scores:
+                prob, pred = sklearn_scores[oid]
             if prob is None:
-                prob = fraud_probability_heuristic(row[1], row[2], row[3], row[4], row[5])
+                prob = fraud_probability_heuristic(
+                    row[colmap["risk_score"]],
+                    row[colmap["order_total"]],
+                    row[colmap["payment_method"]],
+                    row[colmap["promo_used"]],
+                    row[colmap["ip_country"]],
+                )
                 pred = 1 if prob >= 0.5 else 0
             conn.execute(UPSERT_PG, (oid, prob, pred, ts))
             n += 1
+
     print(f"SCORED_COUNT={n}")
     return 0
 
@@ -135,40 +258,51 @@ def run_sqlite() -> int:
         print(f"ERROR: database not found at {path}", file=sys.stderr)
         return 1
 
-    conn = sqlite3.connect(path)
-    conn.execute(CREATE_SQL_SQLITE)
-    conn.commit()
-    rows = conn.execute(UNSHIPPED_SQL).fetchall()
-
     model = None
-    if os.path.isfile(MODEL_PATH):
+    feature_names = load_feature_names()
+    mpath = resolve_model_path()
+    if mpath:
         try:
             import joblib  # type: ignore
 
-            model = joblib.load(MODEL_PATH)
+            model = joblib.load(mpath)
         except Exception as e:
-            print(f"WARN: could not load model: {e}", file=sys.stderr)
+            print(f"WARN: could not load model from {mpath}: {e}", file=sys.stderr)
 
+    conn = sqlite3.connect(path)
+    conn.execute(CREATE_SQL_SQLITE)
+    conn.commit()
+    cur = conn.execute(UNSHIPPED_FEATURES_SQL)
+    col_names = [d[0] for d in cur.description]
+    rows = cur.fetchall()
     ts = datetime.now(timezone.utc).isoformat()
+
+    sklearn_scores: dict[int, tuple[float, int]] | None = None
+    if model is not None and feature_names:
+        sklearn_scores = try_sklearn_batch(model, feature_names, list(rows), col_names)
+
     n = 0
+    colmap = {name: i for i, name in enumerate(col_names)}
     for row in rows:
-        oid = row[0]
+        oid = int(row[colmap["order_id"]])
         prob = None
         pred = None
-        if model is not None:
-            try:
-                out = score_with_model(model, row)
-                if out is not None:
-                    prob, pred = out
-            except Exception as e:
-                print(f"WARN: model score failed for order {oid}: {e}", file=sys.stderr)
+        if sklearn_scores and oid in sklearn_scores:
+            prob, pred = sklearn_scores[oid]
         if prob is None:
-            prob = fraud_probability_heuristic(row[1], row[2], row[3], row[4], row[5])
+            prob = fraud_probability_heuristic(
+                row[colmap["risk_score"]],
+                row[colmap["order_total"]],
+                row[colmap["payment_method"]],
+                row[colmap["promo_used"]],
+                row[colmap["ip_country"]],
+            )
             pred = 1 if prob >= 0.5 else 0
         conn.execute(UPSERT_SQLITE, (oid, prob, pred, ts))
         n += 1
     conn.commit()
     conn.close()
+
     print(f"SCORED_COUNT={n}")
     return 0
 

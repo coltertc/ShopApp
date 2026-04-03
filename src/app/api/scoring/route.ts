@@ -14,10 +14,14 @@ function parseScored(stdout: string): number | null {
   return null;
 }
 
+/** Set USE_PYTHON_SCORING=1 locally if you want jobs/run_inference.py (sklearn) instead of TS. */
+function usePythonScoring(): boolean {
+  const v = process.env.USE_PYTHON_SCORING;
+  return v === "1" || v === "true";
+}
+
 export async function POST() {
   await ensureOrderPredictionsTable();
-  const python = process.env.PYTHON_PATH || "python";
-  const script = `${process.cwd()}/jobs/run_inference.py`;
   const at = new Date().toISOString();
 
   if (!process.env.DATABASE_URL) {
@@ -33,48 +37,72 @@ export async function POST() {
     );
   }
 
-  try {
-    const { stdout, stderr } = await execFileAsync(python, [script], {
-      cwd: process.cwd(),
-      timeout: 120_000,
-      env: {
-        ...process.env,
-      },
-    });
-    const scored = parseScored(stdout) ?? 0;
-    return NextResponse.json({
-      ok: true,
-      scored,
-      mode: "python",
-      at,
-      stdout: stdout.slice(-4000),
-      stderr: stderr?.slice(-2000),
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
+  if (usePythonScoring()) {
+    const python = process.env.PYTHON_PATH || "python";
+    const script = `${process.cwd()}/jobs/run_inference.py`;
     try {
-      const scored = await runInlineScoring();
+      const { stdout, stderr } = await execFileAsync(python, [script], {
+        cwd: process.cwd(),
+        timeout: 120_000,
+        env: { ...process.env },
+      });
+      const scored = parseScored(stdout) ?? 0;
       return NextResponse.json({
         ok: true,
         scored,
-        mode: "inline-typescript",
+        mode: "python",
         at,
-        message:
-          "Python job did not complete; used the bundled TypeScript scorer (same heuristic as the Python fallback). " +
-          msg.slice(0, 200),
+        stdout: stdout.slice(-4000),
+        stderr: stderr?.slice(-2000),
       });
-    } catch (inner) {
-      const innerMsg = inner instanceof Error ? inner.message : String(inner);
-      return NextResponse.json(
-        {
-          ok: false,
-          scored: 0,
-          mode: "failed",
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      try {
+        const scored = await runInlineScoring();
+        return NextResponse.json({
+          ok: true,
+          scored,
+          mode: "typescript-fallback",
           at,
-          error: `${msg}\n${innerMsg}`,
-        },
-        { status: 500 },
-      );
+          message:
+            "USE_PYTHON_SCORING is set but Python did not complete; used TypeScript scorer. " +
+            msg.slice(0, 200),
+        });
+      } catch (inner) {
+        const innerMsg = inner instanceof Error ? inner.message : String(inner);
+        return NextResponse.json(
+          {
+            ok: false,
+            scored: 0,
+            mode: "failed",
+            at,
+            error: `${msg}\n${innerMsg}`,
+          },
+          { status: 500 },
+        );
+      }
     }
+  }
+
+  try {
+    const scored = await runInlineScoring();
+    return NextResponse.json({
+      ok: true,
+      scored,
+      mode: "typescript",
+      at,
+    });
+  } catch (inner) {
+    const innerMsg = inner instanceof Error ? inner.message : String(inner);
+    return NextResponse.json(
+      {
+        ok: false,
+        scored: 0,
+        mode: "failed",
+        at,
+        error: innerMsg,
+      },
+      { status: 500 },
+    );
   }
 }

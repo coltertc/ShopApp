@@ -5,12 +5,17 @@ IS455 ML training — same logic as pipeline.ipynb / results/pipeline_sklearn.py
 Writes only Joblib artifacts:
   - model.joblib              (latest model, overwritten each run)
   - joblib/model_<timestamp>.joblib   (archive copy each run)
+  - artifacts/feature_names.json
 
-Requires shop.db in this directory (or set SHOP_DB_PATH).
+Data source (first match):
+  - DATABASE_URL — Supabase Postgres (same URI as the Next.js app; pooler or direct)
+  - else SQLite: shop.db next to this script, or SHOP_DB_PATH
+
 Console: training logs only; no PNG/JSON/MD files.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sqlite3
@@ -41,12 +46,21 @@ from xgboost import XGBClassifier
 warnings.filterwarnings("ignore")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.environ.get("SHOP_DB_PATH", os.path.join(BASE_DIR, "shop.db"))
+DEFAULT_SQLITE_PATH = os.path.join(BASE_DIR, "shop.db")
 TARGET_COL = "is_fraud"
+
+TRAINING_SQL = """
+SELECT o.*, c.gender, c.city, c.state, c.customer_segment, c.loyalty_tier, c.birthdate,
+       c.created_at AS customer_created_at
+FROM orders o
+JOIN customers c ON o.customer_id = c.customer_id
+"""
 TASK_TYPE = "Classification"
 RANDOM_STATE = 27
 ARCHIVE_SUBDIR = "joblib"
 MODEL_FILENAME = "model.joblib"
+ARTIFACTS_SUBDIR = "artifacts"
+FEATURE_NAMES_FILE = "feature_names.json"
 
 
 def basic_wrangling(
@@ -191,28 +205,93 @@ def clean_outlier(df, features=[], method="remove", messages=True, skew_threshol
     return df
 
 
-def main():
-    if not os.path.isfile(DB_PATH):
-        raise FileNotFoundError(
-            f"Database not found: {DB_PATH}\n"
-            "Place shop.db next to this script or set SHOP_DB_PATH."
-        )
+def load_training_dataframe() -> pd.DataFrame:
+    """Pull orders + customer features from Supabase (DATABASE_URL) or SQLite fallback."""
+    url = os.environ.get("DATABASE_URL")
+    if url:
+        try:
+            import psycopg
+        except ImportError as e:
+            raise ImportError(
+                "DATABASE_URL is set but psycopg is not installed. "
+                "Run: pip install -r requirements.txt"
+            ) from e
+        with psycopg.connect(url, connect_timeout=30) as conn:
+            df = pd.read_sql_query(TRAINING_SQL, conn)
+        print("Loaded training data from DATABASE_URL (Postgres / Supabase).")
+        return df
 
+    db_path = os.environ.get("SHOP_DB_PATH", DEFAULT_SQLITE_PATH)
+    if not os.path.isfile(db_path):
+        raise FileNotFoundError(
+            f"No DATABASE_URL and no SQLite file at {db_path}.\n"
+            "Set DATABASE_URL to your Supabase connection string, or place shop.db here "
+            "or set SHOP_DB_PATH."
+        )
+    conn = sqlite3.connect(db_path)
+    try:
+        df = pd.read_sql_query(TRAINING_SQL, conn)
+    finally:
+        conn.close()
+    print(f"Loaded training data from SQLite: {db_path}")
+    return df
+
+
+def preprocess_orders_frame(
+    df: pd.DataFrame,
+    *,
+    for_inference: bool = False,
+    messages: bool = False,
+) -> pd.DataFrame:
+    """
+    Cleaned frame still including TARGET_COL. Caller should drop ``order_id`` before calling
+    for training parity (high-cardinality id is excluded from features). For inference, set
+    ``df.index`` to order_id and omit the ``order_id`` column so row drops preserve ids on the index.
+    """
+    df = df.copy()
+    df = basic_wrangling(df, messages=messages)
+    date_cols = ["order_datetime", "birthdate", "customer_created_at"]
+    df = parse_date(
+        df, features=[c for c in date_cols if c in df.columns], messages=messages
+    )
+    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    if TARGET_COL in num_cols:
+        num_cols.remove(TARGET_COL)
+    for col in num_cols:
+        df = skew_correct(df, col, methods=["none", "log1p"])
+    label = "" if for_inference else TARGET_COL
+    df = missing_drop(df, label=label)
+    outlier_method = "replace" if for_inference else "remove"
+    df = clean_outlier(df, features=num_cols, method=outlier_method)
+    if TARGET_COL not in df.columns:
+        raise ValueError(
+            f"Expected column {TARGET_COL!r} after preprocessing (needed to align with training)."
+        )
+    return df
+
+
+def preprocess_orders_features(
+    df: pd.DataFrame,
+    *,
+    for_inference: bool = False,
+    messages: bool = False,
+) -> pd.DataFrame:
+    """Feature matrix only (no target); same columns the sklearn Pipeline was fit on."""
+    fr = preprocess_orders_frame(df, for_inference=for_inference, messages=messages)
+    return fr.drop(columns=[TARGET_COL])
+
+
+def main():
     archive_dir = os.path.join(BASE_DIR, ARCHIVE_SUBDIR)
     os.makedirs(archive_dir, exist_ok=True)
 
     if TASK_TYPE != "Classification":
         print("TASK_TYPE is not Classification; notebook expects classification.")
 
-    conn = sqlite3.connect(DB_PATH)
-    query = """
-    SELECT o.*, c.gender, c.city, c.state, c.customer_segment, c.loyalty_tier, c.birthdate,
-           c.created_at as customer_created_at
-    FROM orders o
-    JOIN customers c ON o.customer_id = c.customer_id
-    """
-    df = pd.read_sql_query(query, conn)
-    conn.close()
+    df = load_training_dataframe()
+
+    if "order_id" in df.columns:
+        df = df.drop(columns=["order_id"])
 
     print(f"Shape: {df.shape}")
     print("Value Counts for Target:")
@@ -220,26 +299,17 @@ def main():
     print("\nMissingness Summary:")
     print(df.isnull().sum())
 
-    df = basic_wrangling(df, messages=True)
+    cleaned = preprocess_orders_frame(df, for_inference=False, messages=True)
+    print(f"Shape after cleaning: {cleaned.shape}")
+    X = cleaned.drop(columns=[TARGET_COL])
+    y = cleaned[TARGET_COL]
 
-    date_cols = ["order_datetime", "birthdate", "customer_created_at"]
-    df = parse_date(
-        df, features=[c for c in date_cols if c in df.columns], messages=True
-    )
-
-    num_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-    if TARGET_COL in num_cols:
-        num_cols.remove(TARGET_COL)
-    for col in num_cols:
-        df = skew_correct(df, col, methods=["none", "log1p"])
-
-    df = missing_drop(df, label=TARGET_COL)
-    df = clean_outlier(df, features=num_cols)
-
-    print(f"Shape after cleaning: {df.shape}")
-
-    X = df.drop(columns=[TARGET_COL])
-    y = df[TARGET_COL]
+    artifacts_dir = os.path.join(BASE_DIR, ARTIFACTS_SUBDIR)
+    os.makedirs(artifacts_dir, exist_ok=True)
+    fn_path = os.path.join(artifacts_dir, FEATURE_NAMES_FILE)
+    with open(fn_path, "w", encoding="utf-8") as f:
+        json.dump(list(X.columns), f, indent=2)
+    print(f"Saved feature list: {fn_path}")
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=RANDOM_STATE

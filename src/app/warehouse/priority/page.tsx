@@ -47,9 +47,13 @@ export default async function PriorityQueuePage() {
           orders with <strong>no shipment row</strong> appear here (sample data may already be fully
           shipped—place a new order to populate this queue). Run scoring after new orders arrive so{" "}
           <code className="rounded bg-zinc-200 px-1 dark:bg-zinc-800">order_predictions</code> stays current.
-          When your teammate wires in the real classifier from Part 2, replace or extend{" "}
-          <code className="rounded bg-zinc-200 px-1 dark:bg-zinc-800">jobs/run_inference.py</code> to load
-          their joblib artifact into the same table.
+          On the deployed app, <strong>Run scoring</strong> uses the server&apos;s TypeScript rules engine
+          (same broad signals as the lab heuristic). The sklearn pipeline in{" "}
+          <code className="rounded bg-zinc-200 px-1 dark:bg-zinc-800">pipeline_sklearn.py</code> trains on
+          Supabase for the notebook and can run nightly via GitHub Actions; set{" "}
+          <code className="rounded bg-zinc-200 px-1 dark:bg-zinc-800">USE_PYTHON_SCORING=1</code> locally if you
+          want <code className="rounded bg-zinc-200 px-1 dark:bg-zinc-800">jobs/run_inference.py</code> on the API
+          instead.
         </p>
       </div>
       {err ? (

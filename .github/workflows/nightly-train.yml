@@ -1,0 +1,40 @@
+# Nightly sklearn training against Supabase (Option B: artifacts for notebook / offline use;
+# deployed site scores with TypeScript — see src/lib/inference.ts).
+#
+# Repo → Settings → Secrets → Actions: add DATABASE_URL (Supabase Postgres URI, same as Vercel).
+# Artifacts are downloadable from each workflow run (Actions tab → run → Artifacts).
+
+name: Nightly ML train
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline_sklearn
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python pipeline_sklearn.py
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: ml-artifacts
+          path: |
+            model.joblib
+            artifacts/feature_names.json
+          if-no-files-found: warn
