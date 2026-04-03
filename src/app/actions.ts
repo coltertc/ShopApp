@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -108,4 +109,45 @@ export async function placeOrderAction(lines: LineInput[]) {
   }
 
   redirect(`/orders?placed=${orderId}`);
+}
+
+/** Admin / warehouse: create a shipment row so the order leaves the unshipped priority queue. */
+export async function fulfillOrderFromQueueAction(
+  orderId: number,
+): Promise<{ ok: true } | { error: string }> {
+  if (!Number.isFinite(orderId) || orderId < 1) {
+    return { error: "Invalid order." };
+  }
+
+  const sql = getSql();
+
+  const existing = await sql`
+    SELECT o.order_id FROM orders o
+    LEFT JOIN shipments s ON s.order_id = o.order_id
+    WHERE o.order_id = ${orderId} AND s.shipment_id IS NULL
+  `;
+  if (!existing.length) {
+    return { error: "Order not found or already fulfilled." };
+  }
+
+  const shipDatetime = new Date().toISOString();
+  try {
+    await sql`
+      INSERT INTO shipments (
+        order_id, ship_datetime, carrier, shipping_method, distance_band,
+        promised_days, actual_days, late_delivery
+      ) VALUES (
+        ${orderId}, ${shipDatetime}, ${"UPS"}, ${"ground"}, ${"regional"},
+        ${5}, ${5}, ${0}
+      )
+    `;
+  } catch {
+    return { error: "Could not record shipment. Check database permissions." };
+  }
+
+  revalidatePath("/warehouse/priority");
+  revalidatePath("/admin/orders");
+  revalidatePath("/orders");
+  revalidatePath("/dashboard");
+  return { ok: true };
 }
