@@ -1,4 +1,4 @@
-import { fulfillPriorityOrderFormAction } from "@/app/actions";
+import { FulfillOrderButton } from "@/components/FulfillOrderButton";
 import { getSql } from "@/lib/db";
 
 type Props = {
@@ -110,15 +110,7 @@ export default async function PriorityQueuePage(props: Props) {
                   <tr key={Number(r.order_id)}>
                     <td className="px-3 py-2 font-mono">#{r.order_id}</td>
                     <td className="px-3 py-2 whitespace-nowrap">
-                      <form action={fulfillPriorityOrderFormAction}>
-                        <input type="hidden" name="order_id" value={String(r.order_id)} />
-                        <button
-                          type="submit"
-                          className="rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-600"
-                        >
-                          Fulfill
-                        </button>
-                      </form>
+                      <FulfillOrderButton orderId={Number(r.order_id)} />
                     </td>
                     <td className="px-3 py-2 whitespace-nowrap text-zinc-600 dark:text-zinc-400">
                       {String(r.order_datetime)}
