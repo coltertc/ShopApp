@@ -151,3 +151,16 @@ export async function fulfillOrderFromQueueAction(
   revalidatePath("/dashboard");
   return { ok: true };
 }
+
+/** Form POST from priority queue — redirects back with flash query params. */
+export async function fulfillPriorityOrderFormAction(formData: FormData) {
+  const raw = formData.get("order_id");
+  const orderId = typeof raw === "string" ? parseInt(raw, 10) : NaN;
+  const result = await fulfillOrderFromQueueAction(orderId);
+  if ("error" in result) {
+    redirect(
+      `/warehouse/priority?fulfillError=${encodeURIComponent(result.error)}`,
+    );
+  }
+  redirect("/warehouse/priority?fulfilled=1");
+}

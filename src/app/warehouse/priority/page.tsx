@@ -1,8 +1,14 @@
+import { fulfillPriorityOrderFormAction } from "@/app/actions";
 import { getSql } from "@/lib/db";
 
-import { PriorityQueueTable } from "./ui";
+type Props = {
+  searchParams?: Promise<{
+    fulfilled?: string;
+    fulfillError?: string;
+  }>;
+};
 
-export default async function PriorityQueuePage() {
+export default async function PriorityQueuePage(props: Props) {
   let rows: {
     order_id: number;
     order_datetime: string;
@@ -39,16 +45,10 @@ export default async function PriorityQueuePage() {
     err = e instanceof Error ? e.message : "Query failed";
   }
 
-  const serializableRows = rows.map((r) => ({
-    order_id: Number(r.order_id),
-    order_datetime: String(r.order_datetime),
-    order_total: Number(r.order_total),
-    customer_id: Number(r.customer_id),
-    customer_name: String(r.customer_name),
-    fraud_probability: Number(r.fraud_probability),
-    predicted_fraud: Number(r.predicted_fraud),
-    prediction_timestamp: String(r.prediction_timestamp),
-  }));
+  const sp = (await props.searchParams) ?? {};
+  const fulfillError =
+    typeof sp.fulfillError === "string" ? sp.fulfillError : null;
+  const fulfilled = sp.fulfilled === "1";
 
   return (
     <div className="space-y-6">
@@ -71,12 +71,81 @@ export default async function PriorityQueuePage() {
           instead.
         </p>
       </div>
+      {fulfilled ? (
+        <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100">
+          Order fulfilled — shipment recorded.
+        </p>
+      ) : null}
+      {fulfillError ? (
+        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+          {fulfillError}
+        </p>
+      ) : null}
       {err ? (
         <p className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200">
           {err}
         </p>
       ) : null}
-      <PriorityQueueTable rows={serializableRows} />
+      {!err && rows.length > 0 ? (
+        <>
+          <p className="text-xs text-zinc-500">
+            If you don&apos;t see all columns, scroll the table horizontally.
+          </p>
+          <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
+            <table className="w-full min-w-[800px] text-left text-sm">
+              <thead className="sticky top-0 bg-zinc-50 dark:bg-zinc-800/90">
+                <tr>
+                  <th className="px-3 py-2">Order</th>
+                  <th className="px-3 py-2">Fulfill</th>
+                  <th className="px-3 py-2">When</th>
+                  <th className="px-3 py-2">Customer</th>
+                  <th className="px-3 py-2">Total</th>
+                  <th className="px-3 py-2">Fraud prob.</th>
+                  <th className="px-3 py-2">Pred. fraud</th>
+                  <th className="px-3 py-2">Scored at</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-200 dark:divide-zinc-700">
+                {rows.map((r) => (
+                  <tr key={Number(r.order_id)}>
+                    <td className="px-3 py-2 font-mono">#{r.order_id}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">
+                      <form action={fulfillPriorityOrderFormAction}>
+                        <input type="hidden" name="order_id" value={String(r.order_id)} />
+                        <button
+                          type="submit"
+                          className="rounded-md bg-emerald-700 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-600"
+                        >
+                          Fulfill
+                        </button>
+                      </form>
+                    </td>
+                    <td className="px-3 py-2 whitespace-nowrap text-zinc-600 dark:text-zinc-400">
+                      {String(r.order_datetime)}
+                    </td>
+                    <td className="px-3 py-2">
+                      #{r.customer_id} {r.customer_name}
+                    </td>
+                    <td className="px-3 py-2">
+                      {Number(r.order_total).toLocaleString(undefined, {
+                        style: "currency",
+                        currency: "USD",
+                      })}
+                    </td>
+                    <td className="px-3 py-2 font-mono">
+                      {(Number(r.fraud_probability) * 100).toFixed(1)}%
+                    </td>
+                    <td className="px-3 py-2">{r.predicted_fraud ? "Yes" : "No"}</td>
+                    <td className="px-3 py-2 text-xs text-zinc-600 dark:text-zinc-400">
+                      {String(r.prediction_timestamp)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ) : null}
       {rows.length === 0 && !err ? (
         <p className="text-sm text-zinc-500">
           No unshipped orders with predictions yet. Place an order, then use{" "}
