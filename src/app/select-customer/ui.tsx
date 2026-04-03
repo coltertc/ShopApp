@@ -39,7 +39,7 @@ export function CustomerPicker({
         <div className="max-h-[420px] overflow-auto rounded-lg border border-zinc-200 dark:border-zinc-700">
           <table className="w-full text-left text-sm">
             <thead className="sticky top-0 bg-zinc-100 dark:bg-zinc-800">
-              <tr>
+              <tr className="text-blue-600 dark:text-blue-400">
                 <th className="px-3 py-2 font-medium">ID</th>
                 <th className="px-3 py-2 font-medium">Name</th>
                 <th className="px-3 py-2 font-medium">Email</th>

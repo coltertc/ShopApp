@@ -63,6 +63,17 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
         )}
       </header>
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">{children}</main>
+      {process.env.VERCEL_GIT_COMMIT_SHA ? (
+        <footer className="mx-auto max-w-5xl px-4 py-3 text-center text-[10px] text-zinc-500 dark:text-zinc-500">
+          <span className="text-zinc-400">Build</span>{" "}
+          <code className="rounded bg-zinc-200/20 px-1 font-mono text-zinc-600 dark:bg-zinc-700/40 dark:text-zinc-300">
+            {process.env.VERCEL_GIT_COMMIT_SHA.slice(0, 7)}
+          </code>
+          {process.env.VERCEL_ENV && process.env.VERCEL_ENV !== "production" ? (
+            <span className="ml-1.5 text-zinc-400">({process.env.VERCEL_ENV})</span>
+          ) : null}
+        </footer>
+      ) : null}
     </>
   );
 }
