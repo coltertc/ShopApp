@@ -39,6 +39,17 @@ export default async function PriorityQueuePage() {
     err = e instanceof Error ? e.message : "Query failed";
   }
 
+  const serializableRows = rows.map((r) => ({
+    order_id: Number(r.order_id),
+    order_datetime: String(r.order_datetime),
+    order_total: Number(r.order_total),
+    customer_id: Number(r.customer_id),
+    customer_name: String(r.customer_name),
+    fraud_probability: Number(r.fraud_probability),
+    predicted_fraud: Number(r.predicted_fraud),
+    prediction_timestamp: String(r.prediction_timestamp),
+  }));
+
   return (
     <div className="space-y-6">
       <div>
@@ -65,7 +76,7 @@ export default async function PriorityQueuePage() {
           {err}
         </p>
       ) : null}
-      <PriorityQueueTable rows={rows} />
+      <PriorityQueueTable rows={serializableRows} />
       {rows.length === 0 && !err ? (
         <p className="text-sm text-zinc-500">
           No unshipped orders with predictions yet. Place an order, then use{" "}
