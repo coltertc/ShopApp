@@ -20,6 +20,15 @@ function usePythonScoring(): boolean {
   return v === "1" || v === "true";
 }
 
+/**
+ * When set (e.g. on Vercel production), never run the TypeScript heuristic — it would overwrite
+ * sklearn scores written by the nightly GitHub Action. See README for DISABLE_INLINE_SCORING.
+ */
+function disableInlineScoring(): boolean {
+  const v = process.env.DISABLE_INLINE_SCORING;
+  return v === "1" || v === "true";
+}
+
 export async function POST() {
   await ensureOrderPredictionsTable();
   const at = new Date().toISOString();
@@ -57,6 +66,20 @@ export async function POST() {
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (disableInlineScoring()) {
+        return NextResponse.json(
+          {
+            ok: false,
+            scored: 0,
+            mode: "failed",
+            at,
+            error:
+              "USE_PYTHON_SCORING is set but Python did not complete; DISABLE_INLINE_SCORING prevents TypeScript fallback. " +
+              msg.slice(0, 400),
+          },
+          { status: 500 },
+        );
+      }
       try {
         const scored = await runInlineScoring();
         return NextResponse.json({
@@ -82,6 +105,18 @@ export async function POST() {
         );
       }
     }
+  }
+
+  if (disableInlineScoring()) {
+    return NextResponse.json({
+      ok: true,
+      scored: 0,
+      mode: "external-only",
+      at,
+      message:
+        "Scoring is handled by the nightly GitHub Action (sklearn → order_predictions). " +
+        "This API does not run the TypeScript heuristic when DISABLE_INLINE_SCORING=1.",
+    });
   }
 
   try {

@@ -1,7 +1,8 @@
-# Nightly sklearn training against Supabase (Option B: artifacts for notebook / offline use;
-# deployed site scores with TypeScript — see src/lib/inference.ts).
+# Nightly sklearn training + batch scoring against Supabase.
+# Trains model.joblib, then runs jobs/run_inference.py to upsert order_predictions (sklearn when artifacts exist).
 #
-# Repo → Settings → Secrets → Actions: add DATABASE_URL (Supabase Postgres URI, same as Vercel).
+# Repo → Settings → Secrets → Actions: add DATABASE_URL (Supabase Postgres URI).
+# Prefer the direct Postgres URI (port 5432) for CI batch jobs; pooler :6543 often works too.
 # Artifacts are downloadable from each workflow run (Actions tab → run → Artifacts).
 
 name: Nightly ML train
@@ -29,6 +30,11 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: python pipeline_sklearn.py
+
+      - name: Run batch inference (sklearn → order_predictions)
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python jobs/run_inference.py
 
       - uses: actions/upload-artifact@v4
         if: success()

@@ -35,7 +35,7 @@ python scripts\migrate_sqlite_to_supabase.py C:\path\to\Deployment\shop.db
 
 Paste the **direct** URI from Supabase (**Project Settings → Database → Connection string**), with your real password. The script prints row counts per table, then fixes SERIAL sequences so new inserts get correct IDs.
 
-`order_predictions` is left empty until you run **Run scoring** in the app (or your ML job).
+`order_predictions` is left empty until you run **Run scoring** in the app locally, or until the **nightly GitHub Action** trains and scores (see below).
 
 ### Import steps (macOS / Linux)
 
@@ -64,7 +64,18 @@ Open [http://localhost:3000](http://localhost:3000).
    - `DATABASE_URL` = your **pooled** Postgres URI (`…pooler.supabase.com:6543…`), with `?sslmode=require` if your client string includes it.
 3. Deploy. The `postgres` client uses `prepare: false` so it works with Supabase’s transaction pooler.
 
-**Python scoring on Vercel:** serverless Node **often cannot** run `python jobs/run_inference.py`. If that fails, **Run scoring** automatically falls back to the TypeScript heuristic (same logic as the Python stub). For production Python + joblib, run the job on a small worker (GitHub Action, Railway, etc.) or extend the TS path when you export ONNX, etc.
+**Python scoring on Vercel:** serverless Node **often cannot** run `python jobs/run_inference.py`. If that fails, **Run scoring** automatically falls back to the TypeScript heuristic (same logic as the Python stub) — unless `DISABLE_INLINE_SCORING=1` is set (recommended for production when sklearn scores come from CI).
+
+### Nightly train + sklearn scoring (GitHub Actions)
+
+The workflow [`.github/workflows/nightly-train.yml`](.github/workflows/nightly-train.yml) runs on a schedule (07:00 UTC) and on manual dispatch. It:
+
+1. Runs `python pipeline_sklearn.py` (writes `model.joblib` and `artifacts/feature_names.json`).
+2. Runs `python jobs/run_inference.py` (loads the model and upserts `order_predictions` in Supabase).
+
+**Repository secret:** add `DATABASE_URL` under **Settings → Secrets and variables → Actions**. Use the same database as the app; for batch jobs the **direct** Postgres URI (port **5432**, host like `db.<project>.supabase.co`) is recommended. The pooler URI (`:6543`) often works but if the job fails on connect, switch to direct.
+
+**Vercel:** set `DISABLE_INLINE_SCORING=1` so the **Run scoring** button does not overwrite nightly sklearn rows with the TypeScript heuristic. The warehouse queue still reads `order_predictions` from the database (no redeploy needed when the Action runs).
 
 ## Features
 
@@ -84,6 +95,8 @@ Open [http://localhost:3000](http://localhost:3000).
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `DATABASE_URL` | Yes | Supabase Postgres URI (pooler recommended on Vercel) |
+| `DISABLE_INLINE_SCORING` | No | If `1` or `true`, `POST /api/scoring` does not run the TypeScript heuristic (use on Vercel when scores come from the nightly Action). |
+| `USE_PYTHON_SCORING` | No | If `1` or `true`, the API runs `jobs/run_inference.py` (useful locally; rarely works on Vercel). |
 | `PYTHON_PATH` | No | Python executable for `jobs/run_inference.py` |
 
 ## Part 2 handoff
