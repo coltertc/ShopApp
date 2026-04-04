@@ -53,9 +53,12 @@ export async function AppShell({ children }: { children: React.ReactNode }) {
             Acting as customer #{customerId}: {banner}
           </div>
         ) : (
-          <div className="border-t border-white/10 bg-amber-950/40 px-4 py-2 text-sm text-amber-100">
+          <div className="border-t border-emerald-500/20 bg-emerald-950/50 px-4 py-2 text-sm text-emerald-100">
             No customer selected — choose one on{" "}
-            <Link href="/select-customer" className="underline">
+            <Link
+              href="/select-customer"
+              className="font-medium text-emerald-50 underline decoration-emerald-400/80 underline-offset-2 hover:text-white"
+            >
               Select Customer
             </Link>
             .
