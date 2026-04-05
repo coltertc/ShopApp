@@ -98,17 +98,19 @@ def basic_wrangling(
 def parse_date(
     df, features=[], days_since_today=False, drop_date=True, messages=True
 ):
-    from datetime import datetime as dt
-
     for feat in features:
         if feat in df.columns:
-            df[feat] = pd.to_datetime(df[feat])
+            # Supabase/JSON: ISO8601 with T and Z; SQLite/read_sql may use space-separated.
+            df[feat] = pd.to_datetime(df[feat], format="mixed", utc=True)
             df[f"{feat}_year"] = df[feat].dt.year
             df[f"{feat}_month"] = df[feat].dt.month
             df[f"{feat}_day"] = df[feat].dt.day
             df[f"{feat}_weekday"] = df[feat].dt.day_name()
             if days_since_today:
-                df[f"{feat}_days_until_today"] = (dt.today() - df[feat]).dt.days
+                today_utc = pd.Timestamp.now(tz="UTC").normalize()
+                df[f"{feat}_days_until_today"] = (
+                    today_utc - df[feat].dt.normalize()
+                ).dt.days
             if drop_date:
                 df.drop(columns=[feat], inplace=True)
     return df
