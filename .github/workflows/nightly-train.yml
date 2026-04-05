@@ -1,5 +1,5 @@
 # Nightly sklearn training + batch scoring against Supabase.
-# Trains model.joblib, then runs jobs/run_inference.py to upsert order_predictions (sklearn when artifacts exist).
+# Runs node pipeline.js → pipeline_sklearn.py → models.joblib, then jobs/run_inference.py → order_predictions.
 #
 # Repo → Settings → Secrets → Actions: add DATABASE_URL (Supabase Postgres URI).
 # Prefer the direct Postgres URI (port 5432) for CI batch jobs; pooler :6543 often works too.
@@ -41,6 +41,6 @@ jobs:
         with:
           name: ml-artifacts
           path: |
-            model.joblib
+            models.joblib
             artifacts/feature_names.json
           if-no-files-found: warn

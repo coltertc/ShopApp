@@ -14,19 +14,37 @@ function parseScored(stdout: string): number | null {
   return null;
 }
 
-/** Set USE_PYTHON_SCORING=1 locally if you want jobs/run_inference.py (sklearn) instead of TS. */
-function usePythonScoring(): boolean {
-  const v = process.env.USE_PYTHON_SCORING;
+function skipPythonScoring(): boolean {
+  const v = process.env.SKIP_PYTHON_SCORING;
   return v === "1" || v === "true";
 }
 
-/**
- * When set (e.g. on Vercel production), never run the TypeScript heuristic — it would overwrite
- * sklearn scores written by the nightly GitHub Action. See README for DISABLE_INLINE_SCORING.
- */
+function useTypescriptScoringFallback(): boolean {
+  const v = process.env.USE_TYPESCRIPT_SCORING_FALLBACK;
+  if (v === "1" || v === "true") return true;
+  if (v === "0" || v === "false") return false;
+  return process.env.VERCEL === "1";
+}
+
 function disableInlineScoring(): boolean {
   const v = process.env.DISABLE_INLINE_SCORING;
   return v === "1" || v === "true";
+}
+
+async function runPythonInference(): Promise<{
+  stdout: string;
+  stderr: string;
+  scored: number;
+}> {
+  const python = process.env.PYTHON_PATH || "python";
+  const script = `${process.cwd()}/jobs/run_inference.py`;
+  const { stdout, stderr } = await execFileAsync(python, [script], {
+    cwd: process.cwd(),
+    timeout: 120_000,
+    env: { ...process.env },
+  });
+  const scored = parseScored(stdout) ?? 0;
+  return { stdout, stderr: stderr ?? "", scored };
 }
 
 export async function POST() {
@@ -46,98 +64,85 @@ export async function POST() {
     );
   }
 
-  if (usePythonScoring()) {
-    const python = process.env.PYTHON_PATH || "python";
-    const script = `${process.cwd()}/jobs/run_inference.py`;
-    try {
-      const { stdout, stderr } = await execFileAsync(python, [script], {
-        cwd: process.cwd(),
-        timeout: 120_000,
-        env: { ...process.env },
-      });
-      const scored = parseScored(stdout) ?? 0;
+  if (skipPythonScoring()) {
+    if (disableInlineScoring()) {
       return NextResponse.json({
         ok: true,
-        scored,
-        mode: "python",
+        scored: 0,
+        mode: "external-only",
         at,
-        stdout: stdout.slice(-4000),
-        stderr: stderr?.slice(-2000),
+        message:
+          "Scoring is handled by the nightly GitHub Action (sklearn → order_predictions). " +
+          "This API does not run the TypeScript heuristic when DISABLE_INLINE_SCORING=1.",
       });
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (disableInlineScoring()) {
-        return NextResponse.json(
-          {
-            ok: false,
-            scored: 0,
-            mode: "failed",
-            at,
-            error:
-              "USE_PYTHON_SCORING is set but Python did not complete; DISABLE_INLINE_SCORING prevents TypeScript fallback. " +
-              msg.slice(0, 400),
-          },
-          { status: 500 },
-        );
-      }
-      try {
-        const scored = await runInlineScoring();
-        return NextResponse.json({
-          ok: true,
-          scored,
-          mode: "typescript-fallback",
-          at,
-          message:
-            "USE_PYTHON_SCORING is set but Python did not complete; used TypeScript scorer. " +
-            msg.slice(0, 200),
-        });
-      } catch (inner) {
-        const innerMsg = inner instanceof Error ? inner.message : String(inner);
-        return NextResponse.json(
-          {
-            ok: false,
-            scored: 0,
-            mode: "failed",
-            at,
-            error: `${msg}\n${innerMsg}`,
-          },
-          { status: 500 },
-        );
-      }
+    }
+    try {
+      const scored = await runInlineScoring();
+      return NextResponse.json({ ok: true, scored, mode: "typescript", at });
+    } catch (inner) {
+      const innerMsg = inner instanceof Error ? inner.message : String(inner);
+      return NextResponse.json(
+        { ok: false, scored: 0, mode: "failed", at, error: innerMsg },
+        { status: 500 },
+      );
     }
   }
 
-  if (disableInlineScoring()) {
-    return NextResponse.json({
-      ok: true,
-      scored: 0,
-      mode: "external-only",
-      at,
-      message:
-        "Scoring is handled by the nightly GitHub Action (sklearn → order_predictions). " +
-        "This API does not run the TypeScript heuristic when DISABLE_INLINE_SCORING=1.",
-    });
-  }
-
+  let pythonError = "";
   try {
-    const scored = await runInlineScoring();
+    const { stdout, stderr, scored } = await runPythonInference();
     return NextResponse.json({
       ok: true,
       scored,
-      mode: "typescript",
+      mode: "python",
       at,
+      stdout: stdout.slice(-4000),
+      stderr: stderr?.slice(-2000),
     });
-  } catch (inner) {
-    const innerMsg = inner instanceof Error ? inner.message : String(inner);
-    return NextResponse.json(
-      {
-        ok: false,
-        scored: 0,
-        mode: "failed",
+  } catch (e) {
+    pythonError = e instanceof Error ? e.message : String(e);
+    if (disableInlineScoring()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          scored: 0,
+          mode: "failed",
+          at,
+          error:
+            "Python scoring did not complete; DISABLE_INLINE_SCORING prevents TypeScript fallback. " +
+            pythonError.slice(0, 400),
+        },
+        { status: 500 },
+      );
+    }
+    if (!useTypescriptScoringFallback()) {
+      return NextResponse.json(
+        {
+          ok: false,
+          scored: 0,
+          mode: "failed",
+          at,
+          error:
+            "Python scoring failed (jobs/run_inference.py + models.joblib). " + pythonError.slice(0, 500),
+        },
+        { status: 500 },
+      );
+    }
+    try {
+      const scored = await runInlineScoring();
+      return NextResponse.json({
+        ok: true,
+        scored,
+        mode: "typescript-fallback",
         at,
-        error: innerMsg,
-      },
-      { status: 500 },
-    );
+        message: "Python did not complete; used TypeScript scorer. " + pythonError.slice(0, 200),
+      });
+    } catch (inner) {
+      const innerMsg = inner instanceof Error ? inner.message : String(inner);
+      return NextResponse.json(
+        { ok: false, scored: 0, mode: "failed", at, error: `${pythonError}\n${innerMsg}` },
+        { status: 500 },
+      );
+    }
   }
 }

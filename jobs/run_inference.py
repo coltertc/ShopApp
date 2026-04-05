@@ -5,7 +5,7 @@ Batch scoring for unshipped orders → order_predictions.
 - Else: uses SQLite at ../shop.db (local-only legacy).
 
 Loads the Part 2 sklearn pipeline from (first match):
-  FRAUD_MODEL_PATH, ../model.joblib, ../artifacts/fraud_model.joblib
+  FRAUD_MODEL_PATH, ../models.joblib, ../model.joblib, ../artifacts/fraud_model.joblib
 
 Expects ../artifacts/feature_names.json (written when you run pipeline_sklearn.py).
 If the model or feature list is missing, falls back to the same heuristic as src/lib/inference.ts.
@@ -106,7 +106,7 @@ def resolve_model_path() -> str | None:
     envp = os.environ.get("FRAUD_MODEL_PATH")
     if envp and os.path.isfile(envp):
         return envp
-    for p in (MODEL_PATH_ROOT, MODEL_PATH_LEGACY):
+    for p in (MODEL_PATH_PRIMARY, MODEL_PATH_ROOT, MODEL_PATH_LEGACY):
         if os.path.isfile(p):
             return p
     return None

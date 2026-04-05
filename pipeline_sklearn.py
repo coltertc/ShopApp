@@ -3,7 +3,7 @@
 IS455 ML training — same logic as pipeline.ipynb / results/pipeline_sklearn.py.
 
 Writes only Joblib artifacts:
-  - model.joblib              (latest model, overwritten each run)
+  - models.joblib             (latest model, overwritten each run)
   - joblib/model_<timestamp>.joblib   (archive copy each run)
   - artifacts/feature_names.json
 
@@ -58,7 +58,7 @@ JOIN customers c ON o.customer_id = c.customer_id
 TASK_TYPE = "Classification"
 RANDOM_STATE = 27
 ARCHIVE_SUBDIR = "joblib"
-MODEL_FILENAME = "model.joblib"
+MODEL_FILENAME = "models.joblib"
 ARTIFACTS_SUBDIR = "artifacts"
 FEATURE_NAMES_FILE = "feature_names.json"
 

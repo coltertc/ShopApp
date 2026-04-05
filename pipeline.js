@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /**
  * Runs pipeline_sklearn.py to train and save Joblib models only:
- *   - model.joblib (latest)
+ *   - models.joblib (latest)
  *   - joblib/model_<YYYYMMDD_HHMMSS>.joblib (archive per run)
  *
  * Requires Python 3 and requirements.txt. Set DATABASE_URL to your Supabase Postgres
  * URI (same as the web app). If DATABASE_URL is unset, uses SQLite shop.db or SHOP_DB_PATH.
- * Deployed scoring uses TypeScript (see src/lib/inference.ts); this trains sklearn for the
- * notebook and optional nightly GitHub Actions — not for Vercel request handling by default.
+ * Nightly GitHub Actions run this script; jobs/run_inference.py loads models.joblib for scoring.
  *
  * Usage: node pipeline.js
  */

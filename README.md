@@ -70,7 +70,7 @@ Open [http://localhost:3000](http://localhost:3000).
 
 The workflow [`.github/workflows/nightly-train.yml`](.github/workflows/nightly-train.yml) runs on a schedule (07:00 UTC) and on manual dispatch. It:
 
-1. Runs `python pipeline_sklearn.py` (writes `model.joblib` and `artifacts/feature_names.json`).
+1. Runs `node pipeline.js` → `pipeline_sklearn.py` (writes `models.joblib` and `artifacts/feature_names.json`).
 2. Runs `python jobs/run_inference.py` (loads the model and upserts `order_predictions` in Supabase).
 
 **Repository secret:** add `DATABASE_URL` under **Settings → Secrets and variables → Actions**. Use the same database as the app; for batch jobs the **direct** Postgres URI (port **5432**, host like `db.<project>.supabase.co`) is recommended. The pooler URI (`:6543`) often works but if the job fails on connect, switch to direct.
