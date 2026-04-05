@@ -283,6 +283,69 @@ def preprocess_orders_features(
     return fr.drop(columns=[TARGET_COL])
 
 
+def export_logistic_head_json(model: Pipeline, artifacts_dir: str) -> None:
+    """
+    Export fitted ColumnTransformer + LogisticRegression as JSON so Node can reproduce
+    predict_proba without spawning Python (same math as sklearn for that estimator).
+    Skipped when the tuned best model is not LogisticRegression (e.g. XGB wins).
+    """
+    clf = model.named_steps["classifier"]
+    if not isinstance(clf, LogisticRegression):
+        print(
+            "Skipping artifacts/logistic_head.json: best classifier is not LogisticRegression. "
+            "For TS parity with tree models, add ONNX export or rely on jobs/run_inference.py."
+        )
+        return
+
+    pre = model.named_steps["preprocessor"]
+    coef = clf.coef_.ravel()
+    intercept = float(clf.intercept_[0])
+    slots: list[dict] = []
+
+    for name, trans, cols in pre.transformers_:
+        if name == "remainder":
+            continue
+        if name == "num":
+            imp = trans.named_steps["imputer"]
+            scaler = trans.named_steps["scaler"]
+            for j, col in enumerate(cols):
+                sd = float(scaler.scale_[j])
+                slots.append(
+                    {
+                        "t": "n",
+                        "c": str(col),
+                        "med": float(imp.statistics_[j]),
+                        "mu": float(scaler.mean_[j]),
+                        "sd": sd if sd != 0.0 else 1.0,
+                    }
+                )
+        elif name == "cat":
+            enc = trans.named_steps["encoder"]
+            for j, col in enumerate(cols):
+                for cat in enc.categories_[j]:
+                    slots.append({"t": "c", "c": str(col), "eq": str(cat)})
+
+    if len(slots) != len(coef):
+        print(
+            f"WARN: logistic export slot count {len(slots)} != coef {len(coef)}; skip logistic_head.json"
+        )
+        return
+
+    path = os.path.join(artifacts_dir, "logistic_head.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "version": 1,
+                "intercept": intercept,
+                "coef": [float(x) for x in coef],
+                "slots": slots,
+            },
+            f,
+            indent=2,
+        )
+    print(f"Saved {path} (Node.js can mirror sklearn LogisticRegression + ColumnTransformer)")
+
+
 def main():
     archive_dir = os.path.join(BASE_DIR, ARCHIVE_SUBDIR)
     os.makedirs(archive_dir, exist_ok=True)
@@ -434,6 +497,8 @@ def main():
     archive_path = os.path.join(archive_dir, archive_name)
     shutil.copy2(out_main, archive_path)
     print(f"Archived: {archive_path}")
+
+    export_logistic_head_json(final_model, artifacts_dir)
 
     new_data = X_test.iloc[[0]].copy()
     prediction = final_model.predict(new_data)

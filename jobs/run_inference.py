@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ARTIFACT_DIR = os.path.join(ROOT, "artifacts")
+MODEL_PATH_PRIMARY = os.path.join(ROOT, "models.joblib")
 MODEL_PATH_LEGACY = os.path.join(ARTIFACT_DIR, "fraud_model.joblib")
 MODEL_PATH_ROOT = os.path.join(ROOT, "model.joblib")
 FEATURE_NAMES_PATH = os.path.join(ARTIFACT_DIR, "feature_names.json")
